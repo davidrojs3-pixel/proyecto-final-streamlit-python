@@ -48,3 +48,8 @@ Los resultados son exploratorios y no reemplazan validación técnica, estadíst
 ## Autoría y revisión
 
 El proyecto debe ser revisado, adaptado y probado por el estudiante antes de su entrega final.
+
+## Aplicación publicada
+
+La aplicación se encuentra disponible en Streamlit Cloud:
+https://proyecto-final-app-python-davidrojasreyes.streamlit.app
