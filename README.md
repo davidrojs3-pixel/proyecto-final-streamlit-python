@@ -47,4 +47,4 @@ Los resultados son exploratorios y no reemplazan validación técnica, estadíst
 
 ## Autoría y revisión
 
-El proyecto debe ser revisado, adaptado y probado por el estudiante antes de su entrega final. La aplicación está diseñada como una herramienta exploratoria para cargar, perfilar, procesar y visualizar datasets de distintos contextos.
+El proyecto debe ser revisado, adaptado y probado por el estudiante antes de su entrega final.
