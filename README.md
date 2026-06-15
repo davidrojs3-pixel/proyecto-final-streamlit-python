@@ -39,7 +39,6 @@ streamlit run app.py
 2. Carga y perfil del dataset
 3. Procesamiento de datos
 4. Análisis visual
-5. Guía de entrega
 
 ## Uso responsable
 
