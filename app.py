@@ -62,38 +62,78 @@ def standardize_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def convert_possible_dates(df: pd.DataFrame) -> Tuple[pd.DataFrame, List[str]]:
-    """Convierte columnas que parezcan fechas, sin detener la app ante errores."""
+    """Convierte columnas que parezcan fechas, sin asumir un único formato."""
     clean = df.copy()
     converted = []
+
+    date_keywords = ["date", "fecha", "day", "month", "year"]
+
     for col in clean.columns:
         if pd.api.types.is_datetime64_any_dtype(clean[col]):
             converted.append(col)
             continue
-        if clean[col].dtype == "object" and ("date" in col or "fecha" in col):
-            parsed = pd.to_datetime(clean[col], errors="coerce")
-            success_rate = parsed.notna().mean()
-            if success_rate >= 0.70:
-                clean[col] = parsed
+
+        col_lower = str(col).lower()
+        looks_like_date = any(keyword in col_lower for keyword in date_keywords)
+
+        if looks_like_date:
+            original_series = clean[col]
+
+            # Primer intento: formato automático normal
+            parsed = pd.to_datetime(original_series, errors="coerce")
+
+            # Segundo intento: formato día/mes/año
+            parsed_dayfirst = pd.to_datetime(original_series, errors="coerce", dayfirst=True)
+
+            normal_rate = parsed.notna().mean()
+            dayfirst_rate = parsed_dayfirst.notna().mean()
+
+            if max(normal_rate, dayfirst_rate) >= 0.70:
+                if dayfirst_rate > normal_rate:
+                    clean[col] = parsed_dayfirst
+                else:
+                    clean[col] = parsed
+
                 converted.append(col)
+
     return clean, converted
 
 
 def classify_columns(df: pd.DataFrame) -> Dict[str, List[str]]:
+    """Clasifica columnas sin asumir una estructura fija del dataset."""
     date_cols = [c for c in df.columns if pd.api.types.is_datetime64_any_dtype(df[c])]
     numeric_cols = [c for c in df.select_dtypes(include=[np.number]).columns if c not in date_cols]
-    binary_cols = [c for c in df.columns if df[c].nunique(dropna=True) == 2]
-    categorical_cols = [
+
+    binary_cols = [
         c for c in df.columns
-        if (df[c].dtype == "object" or df[c].dtype == "category" or c in binary_cols)
-        and c not in date_cols
+        if c not in date_cols and df[c].nunique(dropna=True) == 2
     ]
+
+    categorical_cols = []
+    max_unique_for_category = 50
+
+    for c in df.columns:
+        if c in date_cols:
+            continue
+
+        unique_count = df[c].nunique(dropna=True)
+        is_text_like = (
+            pd.api.types.is_object_dtype(df[c])
+            or pd.api.types.is_string_dtype(df[c])
+            or pd.api.types.is_categorical_dtype(df[c])
+        )
+
+        if c in binary_cols:
+            categorical_cols.append(c)
+        elif is_text_like and 1 < unique_count <= max_unique_for_category:
+            categorical_cols.append(c)
+
     return {
         "numeric": numeric_cols,
         "categorical": categorical_cols,
         "binary": binary_cols,
         "date": date_cols,
     }
-
 
 def iqr_outlier_summary(df: pd.DataFrame, numeric_cols: List[str]) -> pd.DataFrame:
     rows = []
@@ -187,25 +227,49 @@ def top_categories_chart(df: pd.DataFrame, col: str, top_n: int = 15):
 
 def simple_insights(df: pd.DataFrame, cols: Dict[str, List[str]]) -> List[str]:
     insights = []
-    insights.append(f"El dataset filtrado tiene {df.shape[0]:,} filas y {df.shape[1]:,} columnas.")
+
+    insights.append(
+        f"El dataset filtrado tiene {df.shape[0]:,} filas y {df.shape[1]:,} columnas."
+    )
+
     null_total = int(df.isna().sum().sum())
-    insights.append(f"Se detectan {null_total:,} valores nulos en la muestra filtrada.")
+    insights.append(
+        f"Se detectan {null_total:,} valores nulos en la muestra filtrada."
+    )
+
     if cols["numeric"]:
         means = df[cols["numeric"]].mean(numeric_only=True).sort_values(ascending=False)
         if not means.empty:
-            insights.append(f"La variable numérica con mayor promedio es '{means.index[0]}'.")
+            insights.append(
+                f"La variable numérica con mayor promedio es '{means.index[0]}'."
+            )
+
     if cols["categorical"]:
         cat = cols["categorical"][0]
         mode_value = df[cat].mode(dropna=True)
         if not mode_value.empty:
-            insights.append(f"En la variable categórica '{cat}', el valor más frecuente es '{mode_value.iloc[0]}'.")
+            insights.append(
+                f"En la variable categórica '{cat}', el valor más frecuente es '{mode_value.iloc[0]}'."
+            )
+
     if len(cols["numeric"]) >= 2:
-        corr = df[cols["numeric"]].corr(numeric_only=True).abs()
-        np.fill_diagonal(corr.values, np.nan)
+        corr = df[cols["numeric"]].corr(numeric_only=True).abs().copy()
+
+        diagonal_mask = pd.DataFrame(
+            np.eye(len(corr), dtype=bool),
+            index=corr.index,
+            columns=corr.columns,
+        )
+
+        corr = corr.mask(diagonal_mask)
         stacked = corr.stack().sort_values(ascending=False)
+
         if not stacked.empty:
             v1, v2 = stacked.index[0]
-            insights.append(f"El par con mayor correlación absoluta es '{v1}' y '{v2}'. Conviene revisarlo con scatter plot antes de concluir causalidad.")
+            insights.append(
+                f"El par con mayor correlación absoluta es '{v1}' y '{v2}'. Conviene revisarlo con scatter plot antes de concluir causalidad."
+            )
+
     return insights
 
 # ============================================================
@@ -214,7 +278,7 @@ def simple_insights(df: pd.DataFrame, cols: Dict[str, List[str]]) -> List[str]:
 st.sidebar.title("📊 Proyecto Final")
 section = st.sidebar.radio(
     "Navegación",
-    ["Home", "Carga y perfil", "Procesamiento", "Análisis visual", "Guía de entrega"],
+    ["Home", "Carga y perfil", "Procesamiento", "Análisis visual"],
 )
 
 st.sidebar.markdown("---")
@@ -487,18 +551,39 @@ elif section == "Análisis visual":
         if cols_filtered["date"] and cols_filtered["numeric"]:
             date_col = st.selectbox("Columna de fecha", cols_filtered["date"], key="temp_date")
             value_col = st.selectbox("Variable numérica", cols_filtered["numeric"], key="temp_value")
-            freq = st.selectbox("Frecuencia", {"Diaria": "D", "Semanal": "W", "Mensual": "M", "Trimestral": "Q", "Anual": "Y"})
+            freq_options = {
+                "Diaria": "D",
+                "Semanal": "W",
+                "Mensual": "ME",
+                "Trimestral": "QE",
+                "Anual": "YE",
+            }
+            freq_label = st.selectbox("Frecuencia", list(freq_options.keys()), key="temp_freq")
+            freq_code = freq_options[freq_label]
+
             agg = st.selectbox("Agregación temporal", ["sum", "mean", "count"], key="temp_agg")
             temp = filtered_df[[date_col, value_col]].dropna().sort_values(date_col).set_index(date_col)
-            if agg == "sum":
-                ts = temp[value_col].resample(freq).sum().reset_index()
-            elif agg == "mean":
-                ts = temp[value_col].resample(freq).mean().reset_index()
+
+            if temp.empty:
+                st.info("No hay datos suficientes para construir la serie temporal con la selección actual.")
             else:
-                ts = temp[value_col].resample(freq).count().reset_index()
-            fig = px.line(ts, x=date_col, y=value_col, markers=True, title=f"Evolución de {value_col}")
-            st.plotly_chart(fig, use_container_width=True)
-            st.dataframe(ts.head(30), use_container_width=True)
+                if agg == "sum":
+                    ts = temp[value_col].resample(freq_code).sum().reset_index()
+                elif agg == "mean":
+                    ts = temp[value_col].resample(freq_code).mean().reset_index()
+                else:
+                    ts = temp[value_col].resample(freq_code).count().reset_index()
+
+                ts = ts.dropna()
+                fig = px.line(
+                    ts,
+                    x=date_col,
+                    y=value_col,
+                    markers=True,
+                    title=f"Evolución de {value_col} - {freq_label}",
+                )
+                st.plotly_chart(fig, use_container_width=True)
+                st.dataframe(ts.head(30), use_container_width=True)
         else:
             st.info("Este dataset no tiene fechas detectadas o no tiene variables numéricas.")
 
